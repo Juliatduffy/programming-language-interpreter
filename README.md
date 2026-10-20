@@ -68,4 +68,4 @@ for 198 total.
 
 ## Author
 
-Created by Julia Duffy for CS 3520
+Created by Julia Duffy for CS 3520, Fall 2025
