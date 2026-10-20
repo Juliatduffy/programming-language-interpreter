@@ -1,0 +1,219 @@
+#lang shplait  
+import:
+  open:
+    "class.rhm"
+    "inherit.rhm"
+
+// ----------------------------------------
+
+fun parse_class(s :: Syntax) :: (Symbol * ClassI):
+  match s
+  | 'class $name($field, ...):
+       extends $parent_name
+       $method
+       ...':
+      values(syntax_to_symbol(name),
+             classI(syntax_to_symbol(parent_name),
+                    map(parse_field,
+                        syntax_to_list('[$field, ...]')),
+                    map(parse_method,
+                        syntax_to_list('[$method, ...]'))))
+  | ~else: error(#'parse_class, "invalid input: " +& s)
+
+fun parse_field(s :: Syntax) :: Symbol:
+  cond
+  | syntax_is_symbol(s):
+      syntax_to_symbol(s)
+  | ~else: error(#'parse_field, "invalid input: " +& s)
+
+fun parse_method(s :: Syntax) :: (Symbol * ExpI):
+  match s
+  |'method $name($arg_name): $body':
+     cond
+     | syntax_to_symbol(arg_name) == #'this:
+         error(#'parse_method, "'this' cannot be used as an argument name")
+     | ~else:
+         values(syntax_to_symbol(name), parse(body, syntax_to_symbol(arg_name)))
+  | ~else: error(#'parse_method, "invalid input: " +& s)
+      
+fun parse(s :: Syntax, arg_name :: Symbol) :: ExpI:
+  cond
+  | syntax_is_integer(s):
+      intI(syntax_to_integer(s))
+  | syntax_is_symbol(s):
+      cond
+      | syntax_to_symbol(s) == arg_name:
+          argI()
+      | syntax_to_symbol(s) == #'arg:
+          argI()
+      | syntax_to_symbol(s) == #'this:
+          thisI()
+      | syntax_to_symbol(s) == #'null:
+          nullI()
+      | ~else:
+          varI(syntax_to_symbol(s)) 
+  | ~else:
+      match s
+      | 'if $condition == 0 | $then_branch | $else_branch':
+          ifI(parse(condition, arg_name), parse(then_branch, arg_name), parse(else_branch, arg_name))
+      | '($(obj :: Identifier))$exp':  
+          castI(syntax_to_symbol(obj), parse(exp, arg_name))
+      | 'let $name :: $ty = $value: $body':
+          cond
+          | syntax_to_symbol(name) == #'this:
+              error(#'parse, "'this' cannot be used as a variable name")
+          | ~else:
+              letI(syntax_to_symbol(name), parse(value, arg_name), parse(body, arg_name))
+      | '$left + $right':
+          plusI(parse(left, arg_name),
+                parse(right, arg_name))
+      | '$left * $right':
+          multI(parse(left, arg_name),
+                parse(right, arg_name))
+      | 'new $id($arg, ...)':
+          newI(syntax_to_symbol(id),
+               map(fun (e): parse(e, arg_name), syntax_to_list('[$arg, ...]')))
+      | 'super . $method_name ($arg)':
+          superI(syntax_to_symbol(method_name),
+                 parse(arg, arg_name))
+      | '$obj . $method_name ($arg)':
+          sendI(parse(obj, arg_name),
+                syntax_to_symbol(method_name),
+                parse(arg, arg_name))
+      | '$obj . $field_name':
+          getI(parse(obj, arg_name),
+               syntax_to_symbol(field_name))
+      | '($e)':
+          parse(e, arg_name)
+      | ~else:
+          error(#'parse, "invalid input: " +& s)
+
+module test:
+  check: parse('0',  #'none)
+         ~is intI(0)
+  check: parse('arg',  #'none)
+         ~is argI() 
+  check: parse('this',  #'none)
+         ~is thisI()
+  check: parse('1 + 2',  #'none)
+         ~is plusI(intI(1), intI(2))
+  check: parse('1 * 2',  #'none)
+         ~is multI(intI(1), intI(2))
+  check: parse('new Posn(1, 2)',  #'none)
+         ~is newI(#'Posn, [intI(1), intI(2)])
+  check: parse('this.x',  #'none)
+         ~is getI(thisI(), #'x)
+  check: parse('this.m(2)',  #'none)
+         ~is sendI(thisI(), #'m, intI(2))
+  check: parse('super.m(1)',  #'none)
+         ~is superI(#'m, intI(1))
+  check: parse('x',  #'none)
+         ~is varI(#'x)
+  check: parse('let x :: Int = 5: x + x',  #'none)
+         ~is letI(#'x, intI(5), plusI(varI(#'x), varI(#'x)))
+
+  check: parse_field('x')
+         ~is #'x
+  check: parse_field('x 1')
+         ~raises "invalid input"
+
+  check: parse_method('method m(arg): this')
+         ~is values(#'m, thisI())
+  check: parse_method('m(arg): 1 2')
+         ~raises "invalid input"
+  
+  check: parse_class('class Posn3D(x, y, z):
+                        extends Posn 
+                        method m1(arg): arg
+                        method m2(arg): this')
+         ~is values(#'Posn3D,
+                    classI(#'Posn,
+                           [#'x, #'y, #'z],
+                           [values(#'m1, argI()),
+                            values(#'m2, thisI())]))
+  check: parse_class('class')
+         ~raises "invalid input"
+
+// ----------------------------------------
+
+// Interpret a Moe program with inheritance that is
+// written with concrete syntax
+fun interp_prog(classes :: Listof(Syntax), s :: Syntax) :: Syntax:
+  let v = interp_i(parse(s, #'none),
+                   map(parse_class, classes)):
+    match v
+    | intV(n): integer_to_syntax(n)
+    | objV(class_name, field_vals): 'object'
+   
+
+module test:
+  check: interp_prog(
+           ['class Empty():
+               extends Object'],
+           'new Empty()'
+         )
+         ~is 'object'
+
+  check: interp_prog(
+           ['class Posn(x, y):
+               extends Object
+               method mdist(arg): this.x + this.y
+               method addDist(arg): arg.mdist(0) + this.mdist(0)',
+            'class Posn3D(z):
+               extends Posn
+               method mdist(arg): this.z + super.mdist(arg)'],
+           '(new Posn3D(5, 3, 1)).addDist(new Posn(2, 7))'
+         )
+         ~is '18'
+  check: interp_prog(
+           ['class Test():
+               extends Object
+               method test(arg): let x :: Int = 10: x * 2'],
+           '(new Test()).test(0)'
+         )
+         ~is '20'
+
+
+module test:
+  check: parse('let x :: Int = 5: x + x', #'none)
+         ~is letI(#'x, intI(5), plusI(varI(#'x), varI(#'x)))
+
+  check: parse('let y :: Int = 10: let z :: Int = 20: y + z', #'none)
+         ~is letI(#'y, intI(10), letI(#'z, intI(20), plusI(varI(#'y), varI(#'z))))
+
+  check: parse('let a :: Int = 3: a * 5', #'none)
+         ~is letI(#'a, intI(3), multI(varI(#'a), intI(5)))
+
+  check: parse('let temp :: Int = 100: temp + 1', #'none)
+         ~is letI(#'temp, intI(100), plusI(varI(#'temp), intI(1)))
+
+  check: parse('let this :: Int = 0: this', #'none)
+         ~raises "'this' cannot be used as a variable name"
+  check: parse_method('method multiply(value): value * 2')
+         ~is values(#'multiply, multI(argI(), intI(2)))
+
+  check: parse_method('method sum(x): x + 10')
+         ~is values(#'sum, plusI(argI(), intI(10)))
+  check: parse_method('method compute(thisValue): thisValue + 1')
+         ~is values(#'compute, plusI(argI(), intI(1)))
+  check: parse_method('method calculate(result): result * result')
+         ~is values(#'calculate, multI(argI(), argI()))
+  check: parse_method('method badMethod(this): this + 10')
+         ~raises "'this' cannot be used as an argument name"
+  check: parse_class('class Posn3D(x, y, z):
+                        extends Posn 
+                        method m1(hey): hey
+                        method m2(arg): this')
+         ~is values(#'Posn3D,
+                    classI(#'Posn,
+                           [#'x, #'y, #'z],
+                           [values(#'m1, argI()),
+                            values(#'m2, thisI())]))
+  check: parse('', #'x)
+         ~raises "invalid input"
+  check: parse('null', #'none)
+         ~is nullI() 
+  check: parse('(hello)null', #'none)
+         ~is castI(#'hello, nullI())
+  check: parse('if x == 0 | 10 | 20', #'x)
+         ~is ifI(argI(), intI(10), intI(20))

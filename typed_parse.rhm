@@ -1,0 +1,240 @@
+#lang shplait
+import:  
+  open:
+    "class.rhm"
+    "inherit.rhm"
+    "typed_class.rhm"
+    "inherit_parse.rhm"
+
+// ----------------------------------------
+
+fun parse_t_class(s :: Syntax) :: (Symbol * ClassT):
+  match s
+  | 'class $name($field, ...):
+       extends $parent_name
+       $method
+       ...':
+      values(syntax_to_symbol(name),
+             classT(syntax_to_symbol(parent_name),
+                    map(parse_t_field,
+                        syntax_to_list('[$field, ...]')),
+                    map(parse_t_method,
+                        syntax_to_list('[$method, ...]'))))
+  | ~else: error(#'parse_class, "invalid input: " +& s)
+
+fun parse_t_field(s :: Syntax) :: (Symbol * Type):
+  match s
+  | '$name :: $ty':
+      values(syntax_to_symbol(name),
+             parse_type(ty))
+  | ~else: error(#'parse_t_field, "invalid input: " +& s)
+
+fun parse_t_method(s :: Syntax) :: (Symbol * MethodT):
+  match s
+  |'method $name($arg_name :: $arg_ty) :: $res_ty: $body':
+     values(syntax_to_symbol(name),
+            methodT(syntax_to_symbol(arg_name),
+                    parse_type(arg_ty),
+                    parse_type(res_ty),
+                    parse(body, #'none)))
+  | ~else: error(#'parse_t_method, "invalid input: " +& s)
+
+fun parse_type(s :: Syntax) :: Type:
+  match s
+  | 'Int': intT()
+  | ~else:
+      cond
+      | syntax_is_symbol(s):
+          objT(syntax_to_symbol(s))
+      | ~else: error(#'parse_type, "invalid input: " +& s)
+
+module test:
+  check: parse_type('Int')
+         ~is intT()
+  check: parse_type('Object')
+         ~is objT(#'Object)
+  check: parse_type('()')
+         ~raises "invalid input"
+
+  check: parse_t_field('x :: Int')
+         ~is values(#'x, intT())
+  check: parse_t_field('x')
+         ~raises "invalid input"
+
+  check: parse_t_method('method m(arg :: Int) :: Object: this')
+         ~is values(#'m, methodT(#'arg, intT(), objT(#'Object), thisI()))
+  check: parse_t_method('m 1')
+         ~raises "invalid input"
+  
+  check: parse_t_class('class Posn3D(x :: Int,
+                                     y :: Int):
+                          extends Posn
+                          method m1(arg :: Int) :: Int:
+                            arg
+                          method m2(arg :: Int) :: Object:
+                            this')
+         ~is values(#'Posn3D,
+                    classT(#'Posn,
+                           [values(#'x, intT()),
+                            values(#'y, intT())],
+                           [values(#'m1, methodT(#'arg, intT(), intT(), argI())),
+                            values(#'m2, methodT(#'arg, intT(), objT(#'Object), thisI()))]))
+  check: parse_t_class('class')
+         ~raises "invalid input"
+
+// ----------------------------------------
+
+fun run_t_prog(classes :: Listof(Syntax), a :: Syntax) :: Syntax:
+  def a_parsed = parse(a, #'none)
+  def classes_parsed = map(parse_t_class, classes)
+  begin:
+    typecheck(a_parsed, classes_parsed)
+    match interp_t(a_parsed, classes_parsed):
+    | intV(n): integer_to_syntax(n)
+    | objV(class_name, field_vals): 'object'
+
+module test:
+  check: run_t_prog(['class Empty():
+                        extends Object'],
+                    'new Empty()')
+         ~is 'object'
+         
+  check: run_t_prog(
+           [
+             'class Posn(x :: Int,
+                         y :: Int):
+                extends Object
+                method mdist(arg :: Int) :: Int:
+                  this.x + this.y
+                method addDist(arg :: Posn) :: Int:
+                  arg.mdist(0) + this.mdist(0)',
+             'class Posn3D(z :: Int):
+                extends Posn
+                method mdist(arg :: Int) :: Int:
+                  this.z + super.mdist(arg)'
+           ],
+           '(new Posn3D(5, 3, 1)).addDist(new Posn(2, 7))'
+         )
+         ~is '18'
+
+module test:
+  check: parse('let x :: Int = 5: x', #'none)
+         ~is letI(#'x, intI(5), varI(#'x))
+  check: parse('let y :: Int = 10: y * y', #'none)
+         ~is letI(#'y, intI(10), multI(varI(#'y), varI(#'y)))
+  check: parse('let z :: Int = 20: let x :: Int = z: x + z', #'none)
+         ~is letI(#'z, intI(20), letI(#'x, varI(#'z), plusI(varI(#'x), varI(#'z))))
+  check: parse('x', #'none)
+         ~is varI(#'x)
+  check: parse('let a :: Int = 1: let b :: Int = a + 2: a * b', #'none)
+         ~is letI(#'a, intI(1), letI(#'b, plusI(varI(#'a), intI(2)), multI(varI(#'a), varI(#'b))))
+  check: parse('let n :: Int = 100: n + n', #'none)
+         ~is letI(#'n, intI(100), plusI(varI(#'n), varI(#'n)))
+  check: parse('let m :: Int = 42: m * (m + 1)', #'none)
+         ~is letI(#'m, intI(42), multI(varI(#'m), plusI(varI(#'m), intI(1))))
+  check: run_t_prog([], 'x')
+         ~raises "free variable"
+
+module test:
+  check: run_t_prog(['class Empty():
+                        extends Object'],
+                    'new Empty()')
+         ~is 'object'
+         
+  check: run_t_prog(
+           [
+             'class Posn(x :: Int,
+                         y :: Int):
+                extends Object
+                method mdist(arg :: Int) :: Int:
+                  this.x + this.y
+                method addDist(arg :: Posn) :: Int:
+                  arg.mdist(0) + this.mdist(0)',
+             'class Posn3D(z :: Int):
+                extends Posn
+                method mdist(arg :: Int) :: Int:
+                  this.z + super.mdist(arg)'
+           ],
+           '(new Posn3D(5, 3, 1)).addDist(new Posn(2, 7))'
+         )
+         ~is '18'
+
+module test:
+  check: run_t_prog([], 'let x :: Int = 5: x')
+         ~is '5'
+  check: run_t_prog([], 
+                    'let x :: Int = 10:
+                       let y :: Int = x + 5:
+                         y * 2')
+         ~is '30'
+  check: run_t_prog([],
+                    'let x :: Int = 10:
+                       let x :: Int = 20:
+                         x + 5')
+         ~is '25'
+  check: run_t_prog([], 'let x :: Int = y + 5:
+                           x')
+         ~raises "free variable"
+  check: run_t_prog(['class Test():
+                        extends Object
+                        method double(arg :: Int) :: Int:
+                          arg * 2'],
+                    '(new Test()).double(10)')
+         ~is '20'
+  check: run_t_prog(['class Test():
+                        extends Object
+                        method shadow(x :: Int) :: Int:
+                          let x :: Int = arg + 10:
+                            x * 2'],
+                    '(new Test()).shadow(5)')
+         ~is '30'
+  check: run_t_prog(
+           [
+             'class Posn(x :: Int,
+                         y :: Int):
+                extends Object
+                method mdist(arg :: Int) :: Int:
+                  x + y
+                method addDist(arg :: Posn) :: Int:
+                  arg.mdist(0) + this.mdist(0)',
+             'class Posn3D(z :: Int):
+                extends Posn
+                method mdist(arg :: Int) :: Int:
+                  z + super.mdist(arg)'
+           ],
+           '(new Posn3D(5, 3, 1)).addDist(new Posn(2, 7))'
+         )
+         ~is '18'
+  check: run_t_prog(
+           [
+             'class Posn(x :: Int,
+                         y :: Int):
+                extends Object
+                method mdist(arg :: Int) :: Int:
+                  x + y
+                method addDist(arg :: Posn) :: Int:
+                  arg.mdist(0) + this.mdist(0)',
+             'class Posn3D(z :: Int):
+                extends Posn
+                method mdist(arg :: Int) :: Int:
+                  z + super.mdist(arg) + y'
+           ],
+           '(new Posn3D(5, 3, 1)).addDist(new Posn(2, 7))'
+         )
+         ~is '21'
+  check: run_t_prog(
+         ['class A(x :: Int):
+             extends Object
+             method getX(arg :: Int) :: Int:
+               x',
+          'class B(y :: Int):
+             extends A
+             method getY(arg :: Int) :: Int:
+               y + x',
+          'class C(z :: Int):
+             extends B
+             method getZ(arg :: Int) :: Int:
+               z + x + y'],
+         '(new C(1, 2, 3)).getZ(0)'
+       )
+         ~is '6'
