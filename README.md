@@ -1,7 +1,7 @@
 # Programming Language Interpreter
 
 This is an interpreter and typechecker for a small class-based object-oriented
-language, built for my CS 3520 final project. The language has classes, fields,
+language called "Moe", built for my CS 3520 final project. The language has classes, fields,
 methods, inheritance, and `super` calls, and it is statically typed, so a program
 gets typechecked before it runs. You hand it a list of class definitions and an
 expression, and it parses the program, checks the types, and evaluates it.
