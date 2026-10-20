@@ -1,4 +1,4 @@
-# Programming Language Interpreter
+## Programming Language Interpreter
 
 This is an interpreter and typechecker for a small class-based object-oriented
 language called "Moe", built for my CS 3520 final project. The language has classes, fields,
